@@ -6,10 +6,10 @@
 
 namespace leveldb {
 
-static const int kBlockSize = 4096;
+static const uint64_t kBlockSize = 8*1024*1024UL;
 
 Arena::Arena()
-    : alloc_ptr_(nullptr), alloc_bytes_remaining_(0), memory_usage_(0) {}
+    : alloc_ptr_(nullptr), alloc_bytes_remaining_(0), memory_usage_(0),refs_(0) {}
 
 Arena::~Arena() {
   for (size_t i = 0; i < blocks_.size(); i++) {

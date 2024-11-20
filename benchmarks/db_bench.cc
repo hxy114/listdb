@@ -44,7 +44,7 @@
 //      stats       -- Print DB stats
 //      sstables    -- Print sstable info
 //      heapprofile -- Dump a heap profile (if supported by this port)
-static const char* FLAGS_benchmarks =
+/*static const char* FLAGS_benchmarks =
     "fillseq,"
     "fillsync,"
     "fillrandom,"
@@ -62,7 +62,9 @@ static const char* FLAGS_benchmarks =
     "snappycomp,"
     "snappyuncomp,"
     "zstdcomp,"
-    "zstduncomp,";
+    "zstduncomp,";*/
+static const char* FLAGS_benchmarks =
+    "fillrandom,";
 
 // Number of key/values to place in database
 static int FLAGS_num = 1000000;
@@ -88,7 +90,7 @@ static bool FLAGS_comparisons = false;
 
 // Number of bytes to buffer in memtable before compacting
 // (initialized to default value by "main")
-static int FLAGS_write_buffer_size = 0;
+static size_t FLAGS_write_buffer_size = 0;
 
 // Number of bytes written to each file.
 // (initialized to default value by "main")
@@ -100,14 +102,14 @@ static int FLAGS_block_size = 0;
 
 // Number of bytes to use as a cache of uncompressed data.
 // Negative means use default settings.
-static int FLAGS_cache_size = -1;
+static int FLAGS_cache_size = 32 << 20;
 
 // Maximum number of files to keep open at the same time (use default if == 0)
 static int FLAGS_open_files = 0;
 
 // Bloom filter bits per key.
 // Negative means use default settings.
-static int FLAGS_bloom_bits = -1;
+static int FLAGS_bloom_bits = 10;
 
 // Common key prefix length.
 static int FLAGS_key_prefix = 0;

@@ -43,7 +43,7 @@ static double MaxBytesForLevel(const Options* options, int level) {
   // the level-0 compaction threshold based on number of files.
 
   // Result for both level-0 and level-1
-  double result = 10. * 1048576.0;
+  double result = 6. * 1048576.0 * 1024.0;
   while (level > 1) {
     result *= 10;
     level--;
@@ -815,16 +815,16 @@ Status VersionSet::LogAndApply(VersionEdit* edit, port::Mutex* mu) {
 
   // Unlock during expensive MANIFEST log write
   {
-    mu->Unlock();
+    //mu->Unlock();
 
     // Write new record to MANIFEST log
     if (s.ok()) {
       std::string record;
       edit->EncodeTo(&record);
       s = descriptor_log_->AddRecord(record);
-      if (s.ok()) {
-        s = descriptor_file_->Sync();
-      }
+      //if (s.ok()) {
+        //s = descriptor_file_->Sync();
+      //}
       if (!s.ok()) {
         Log(options_->info_log, "MANIFEST write: %s\n", s.ToString().c_str());
       }
@@ -836,7 +836,7 @@ Status VersionSet::LogAndApply(VersionEdit* edit, port::Mutex* mu) {
       s = SetCurrentFile(env_, dbname_, manifest_file_number_);
     }
 
-    mu->Lock();
+    //mu->Lock();
   }
 
   // Install the new version
@@ -1216,6 +1216,36 @@ void VersionSet::GetRange2(const std::vector<FileMetaData*>& inputs1,
   GetRange(all, smallest, largest);
 }
 
+Iterator* VersionSet::MakeInputIteratorL0(CompactionL0* c) {
+  ReadOptions options;
+  options.verify_checksums = options_->paranoid_checks;
+  options.fill_cache = false;
+
+  // Level-0 files have to be merged together.  For other levels,
+  // we will make a concatenating iterator per level.
+  // TODO(opt): use concatenating iterator for level-0 if there is no overlap
+  const int space = 2;
+  Iterator** list = new Iterator*[space];
+
+  int num = 0;
+  MemTable *pmtable = c->memTable_;
+  list[num++] = pmtable->NewIterator();
+
+
+  if (!c->inputs_.empty()) {
+
+    // Create concatenating iterator for the files from this level
+    list[num++] = NewTwoLevelIterator(
+        new Version::LevelFileNumIterator(icmp_, &c->inputs_),
+        &GetFileIterator, table_cache_, options);
+  }
+  assert(num <= space);
+  Iterator* result = NewMergingIterator(&icmp_, list, num);
+  delete[] list;
+  return result;
+
+}
+
 Iterator* VersionSet::MakeInputIterator(Compaction* c) {
   ReadOptions options;
   options.verify_checksums = options_->paranoid_checks;
@@ -1247,6 +1277,32 @@ Iterator* VersionSet::MakeInputIterator(Compaction* c) {
   Iterator* result = NewMergingIterator(&icmp_, list, num);
   delete[] list;
   return result;
+}
+
+CompactionL0* VersionSet::PickCompactionL0(MemTable *memtable,std::vector<FileMetaData*>&input, InternalKey *all_start, InternalKey *all_limit, Version *current){
+
+  CompactionL0* c;
+
+  c = new CompactionL0(options_);
+  c->memTable_=memtable;
+  c->input_version_ = current_;
+  //c->input_version_->Ref();
+  // Compute the set of grandparent files that overlap this compaction
+  // (parent == level+1; grandparent == level+2)
+
+  c->inputs_=std::move(input);
+  current_->GetOverlappingInputs(2, all_start, all_limit,
+                                 &c->grandparents_);
+
+
+  // Update the place where we will do the next compaction for this level.
+  // We update this immediately instead of waiting for the VersionEdit
+  // to be applied so that if the compaction fails, we will try a different
+  // key range next time.
+  //compact_pointer_[level] = largest.Encode().ToString();
+  //c->edit_.SetCompactPointer(level, largest);
+  return c;
+
 }
 
 Compaction* VersionSet::PickCompaction() {
@@ -1560,6 +1616,122 @@ bool Compaction::ShouldStopBefore(const Slice& internal_key) {
 }
 
 void Compaction::ReleaseInputs() {
+  if (input_version_ != nullptr) {
+    input_version_->Unref();
+    input_version_ = nullptr;
+  }
+}
+
+
+CompactionL0::CompactionL0(const Options* options)
+    : level_(0),
+      max_output_file_size_(MaxFileSizeForLevel(options, 0)),
+      input_version_(nullptr),
+      grandparent_index_(0),
+      seen_key_(false),
+      overlapped_bytes_(0),
+      grandparent_indexs_(FIRST_L0_THREAD_NUMBER,0),
+      seen_keys_(FIRST_L0_THREAD_NUMBER,false),
+      overlapped_bytess_(FIRST_L0_THREAD_NUMBER,0){
+  for (int i = 0; i < config::kNumLevels; i++) {
+    level_ptrs_[i] = 0;
+  }
+}
+
+CompactionL0::~CompactionL0() {
+  if (input_version_ != nullptr) {
+    input_version_->Unref();
+  }
+}
+
+bool CompactionL0::IsTrivialMove() const {
+  const VersionSet* vset = input_version_->vset_;
+  // Avoid a move if there is lots of overlapping grandparent data.
+  // Otherwise, the move could create a parent file that will require
+  // a very expensive merge later on.
+  return ( num_input_filesL1() == 0 &&
+          TotalFileSize(grandparents_) <=
+              MaxGrandParentOverlapBytes(vset->options_));
+}
+
+void CompactionL0::AddInputDeletions(VersionEdit* edit) {
+
+  for (size_t i = 0; i < inputs_.size(); i++) {
+    edit->RemoveFile(level_ +1, inputs_[i]->number);
+  }
+
+}
+
+bool CompactionL0::IsBaseLevelForKey(const Slice& user_key) {
+  // Maybe use binary search to find right entry instead of linear search?
+  const Comparator* user_cmp = input_version_->vset_->icmp_.user_comparator();
+  for (int lvl = level_ + 2; lvl < config::kNumLevels; lvl++) {
+    const std::vector<FileMetaData*>& files = input_version_->files_[lvl];
+    while (level_ptrs_[lvl] < files.size()) {
+      FileMetaData* f = files[level_ptrs_[lvl]];
+      if (user_cmp->Compare(user_key, f->largest.user_key()) <= 0) {
+        // We've advanced far enough
+        if (user_cmp->Compare(user_key, f->smallest.user_key()) >= 0) {
+          // Key falls in this file's range, so definitely not base level
+          return false;
+        }
+        break;
+      }
+      level_ptrs_[lvl]++;
+    }
+  }
+  return true;
+}
+
+bool CompactionL0::ShouldStopBeforeSub(const Slice& internal_key,int k) {
+  const VersionSet* vset = input_version_->vset_;
+  // Scan to find earliest grandparent file that contains key.
+  const InternalKeyComparator* icmp = &vset->icmp_;
+  while (grandparent_indexs_[k] < grandparents_.size() &&
+         icmp->Compare(internal_key,
+                       grandparents_[grandparent_indexs_[k]]->largest.Encode()) >
+             0) {
+    if (seen_keys_[k]) {
+      overlapped_bytess_[k] += grandparents_[grandparent_indexs_[k]]->file_size;
+    }
+    grandparent_indexs_[k]++;
+  }
+  seen_keys_[k] = true;
+
+  if (overlapped_bytess_[k] > MaxGrandParentOverlapBytes(vset->options_)) {
+    // Too much overlap for current output; start new output
+    overlapped_bytess_[k] = 0;
+    return true;
+  } else {
+    return false;
+  }
+}
+
+bool CompactionL0::ShouldStopBefore(const Slice& internal_key) {
+  const VersionSet* vset = input_version_->vset_;
+  // Scan to find earliest grandparent file that contains key.
+  const InternalKeyComparator* icmp = &vset->icmp_;
+  while (grandparent_index_ < grandparents_.size() &&
+         icmp->Compare(internal_key,
+                       grandparents_[grandparent_index_]->largest.Encode()) >
+             0) {
+    if (seen_key_) {
+      overlapped_bytes_ += grandparents_[grandparent_index_]->file_size;
+    }
+    grandparent_index_++;
+  }
+  seen_key_ = true;
+
+  if (overlapped_bytes_ > MaxGrandParentOverlapBytes(vset->options_)) {
+    // Too much overlap for current output; start new output
+    overlapped_bytes_ = 0;
+    return true;
+  } else {
+    return false;
+  }
+}
+
+void CompactionL0::ReleaseInputs() {
   if (input_version_ != nullptr) {
     input_version_->Unref();
     input_version_ = nullptr;

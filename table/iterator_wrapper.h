@@ -39,6 +39,10 @@ class IteratorWrapper {
     assert(Valid());
     return key_;
   }
+  Slice mykey() const {
+    assert(Valid());
+    return iter_->mykey();
+  }
   Slice value() const {
     assert(Valid());
     return iter_->value();

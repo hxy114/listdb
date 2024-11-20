@@ -30,14 +30,18 @@
 #include <atomic>
 #include <cassert>
 #include <cstdlib>
+#include <thread>
 
+#include "table/merger.h"
 #include "util/arena.h"
+#include "util/nvm_arena.h"
 #include "util/random.h"
-
+#include "db/db_impl.h"
 namespace leveldb {
 
 template <typename Key, class Comparator>
 class SkipList {
+  friend class MemTable;
  private:
   struct Node;
 
@@ -46,19 +50,26 @@ class SkipList {
   // and will allocate memory using "*arena".  Objects allocated in the arena
   // must remain allocated for the lifetime of the skiplist object.
   explicit SkipList(Comparator cmp, Arena* arena);
-
+  explicit SkipList(Comparator cmp, Arena* arena, bool big_table);
+  explicit SkipList(Comparator cmp, Arena* arena, Node *head, size_t high);
+  explicit SkipList(SkipList*);
+  ~SkipList();
   SkipList(const SkipList&) = delete;
   SkipList& operator=(const SkipList&) = delete;
 
   // Insert key into the list.
   // REQUIRES: nothing that compares equal to key is currently in the list.
-  void Insert(const Key& key);
-
+  void Insert(const Key& key,size_t encoded_len);
+  void Insert(const Key& key,size_t encoded_len,Node **pre);
+  void Sort(NvmArena * nvmArena, DBImpl *db);
+  void FirstSplit(class SkipList *&table, std::vector<void *>& split_key);
+  void Split(const Key& start, const Key &end, class SkipList *&table, bool is_start, bool is_end);
   // Returns true iff an entry that compares equal to key is in the list.
   bool Contains(const Key& key) const;
 
   // Iteration over the contents of a skip list
   class Iterator {
+    friend class SkipList;
    public:
     // Initialize an iterator over the specified list.
     // The returned iterator is not valid.
@@ -103,7 +114,8 @@ class SkipList {
     return max_height_.load(std::memory_order_relaxed);
   }
 
-  Node* NewNode(const Key& key, int height);
+  Node* NewNode(const Key& key, int height, size_t len);
+  Node* MyNewNode(const Key& key, int height, size_t len);
   int RandomHeight();
   bool Equal(const Key& a, const Key& b) const { return (compare_(a, b) == 0); }
 
@@ -116,6 +128,7 @@ class SkipList {
   // If prev is non-null, fills prev[level] with pointer to previous
   // node at "level" for every level in [0..max_height_-1].
   Node* FindGreaterOrEqual(const Key& key, Node** prev) const;
+  Node* FindGreaterOrEqual(const Key& key, const Key& end, bool is_end, Node** prev) const;
 
   // Return the latest node with a key < key.
   // Return head_ if there is no such node.
@@ -127,8 +140,8 @@ class SkipList {
 
   // Immutable after construction
   Comparator const compare_;
-  Arena* const arena_;  // Arena used for allocations of nodes
-
+  Arena* arena_;  // Arena used for allocations of nodes
+  char *buffer_;
   Node* const head_;
 
   // Modified only by Insert().  Read racily by readers, but stale
@@ -137,15 +150,18 @@ class SkipList {
 
   // Read/written only by Insert().
   Random rnd_;
+  bool big_;
+
+
 };
 
 // Implementation details follow
 template <typename Key, class Comparator>
 struct SkipList<Key, Comparator>::Node {
-  explicit Node(const Key& k) : key(k) {}
+  explicit Node(const Key& k, size_t l=0) : key(k),len(l) {}
 
-  Key const key;
-
+  Key key;
+  size_t len;
   // Accessors/mutators for links.  Wrapped in methods so we can
   // add the appropriate barriers as necessary.
   Node* Next(int n) {
@@ -178,10 +194,16 @@ struct SkipList<Key, Comparator>::Node {
 
 template <typename Key, class Comparator>
 typename SkipList<Key, Comparator>::Node* SkipList<Key, Comparator>::NewNode(
-    const Key& key, int height) {
+    const Key& key, int height,size_t len) {
   char* const node_memory = arena_->AllocateAligned(
       sizeof(Node) + sizeof(std::atomic<Node*>) * (height - 1));
-  return new (node_memory) Node(key);
+  return new (node_memory) Node(key,len);
+}
+template <typename Key, class Comparator>
+typename SkipList<Key, Comparator>::Node* SkipList<Key, Comparator>::MyNewNode(
+    const Key& key, int height,size_t len) {
+  assert(buffer_!= nullptr);
+  return new (buffer_) Node(key,len);
 }
 
 template <typename Key, class Comparator>
@@ -280,6 +302,33 @@ SkipList<Key, Comparator>::FindGreaterOrEqual(const Key& key,
 
 template <typename Key, class Comparator>
 typename SkipList<Key, Comparator>::Node*
+SkipList<Key, Comparator>::FindGreaterOrEqual(const Key& key,const Key& end,bool is_end,
+                                              Node** prev) const {
+  Node* x = head_;
+  int level = GetMaxHeight() - 1;
+  while (true) {
+    Node* next = x->Next(level);
+    if (KeyIsAfterNode(key, next)) {
+      // Keep searching in this list
+      x = next;
+    } else {
+      if(prev[level]== nullptr &&(next == nullptr || is_end || KeyIsAfterNode(end,next))) {
+        prev[level] = x;
+      }
+      //if (prev != nullptr) prev[level] = x;
+      if (level == 0) {
+        return next;
+      } else {
+        // Switch to next list
+        level--;
+      }
+    }
+  }
+}
+
+
+template <typename Key, class Comparator>
+typename SkipList<Key, Comparator>::Node*
 SkipList<Key, Comparator>::FindLessThan(const Key& key) const {
   Node* x = head_;
   int level = GetMaxHeight() - 1;
@@ -323,16 +372,58 @@ template <typename Key, class Comparator>
 SkipList<Key, Comparator>::SkipList(Comparator cmp, Arena* arena)
     : compare_(cmp),
       arena_(arena),
-      head_(NewNode(0 /* any key will do */, kMaxHeight)),
+      buffer_(nullptr),
+      head_(NewNode(0 /* any key will do */, kMaxHeight, 0)),
       max_height_(1),
-      rnd_(0xdeadbeef) {
+      rnd_(0xdeadbeef),
+      big_(false){
   for (int i = 0; i < kMaxHeight; i++) {
     head_->SetNext(i, nullptr);
   }
 }
 
 template <typename Key, class Comparator>
-void SkipList<Key, Comparator>::Insert(const Key& key) {
+SkipList<Key, Comparator>::SkipList(Comparator cmp, Arena* arena, bool big_table)
+    : compare_(cmp),
+      arena_(arena),
+      buffer_((char *)malloc(sizeof(Node) + sizeof(std::atomic<Node*>) * (kMaxHeight - 1))),
+      head_(MyNewNode(0 /* any key will do */, kMaxHeight, 0)),
+      max_height_(1),
+      rnd_(0xdeadbeef),
+      big_(true){
+  for (int i = 0; i < kMaxHeight; i++) {
+    head_->SetNext(i, nullptr);
+  }
+}
+
+template <typename Key, class Comparator>
+SkipList<Key, Comparator>::SkipList(Comparator cmp, Arena* arena, SkipList::Node *head, size_t high)
+    : compare_(cmp),
+      arena_(arena),
+      buffer_(nullptr),
+      head_(head),
+      max_height_(high),
+      rnd_(0xdeadbeef),
+      big_(false){}
+
+
+template <typename Key, class Comparator>
+SkipList<Key, Comparator>:: SkipList(SkipList* skip)
+    :compare_(skip->compare_),
+      arena_(skip->arena_),
+      buffer_(skip->buffer_),
+      head_(skip->head_),
+      max_height_(skip->GetMaxHeight()),
+      rnd_(0xdeadbeef),
+      big_(skip->big_){}
+template <typename Key, class Comparator>
+SkipList<Key, Comparator>::~SkipList(){
+  if(big_) {
+    free(buffer_);
+  }
+}
+template <typename Key, class Comparator>
+void SkipList<Key, Comparator>::Insert(const Key& key,size_t len) {
   // TODO(opt): We can use a barrier-free variant of FindGreaterOrEqual()
   // here since Insert() is externally synchronized.
   Node* prev[kMaxHeight];
@@ -356,7 +447,7 @@ void SkipList<Key, Comparator>::Insert(const Key& key) {
     max_height_.store(height, std::memory_order_relaxed);
   }
 
-  x = NewNode(key, height);
+  x = NewNode(key, height,len);
   for (int i = 0; i < height; i++) {
     // NoBarrier_SetNext() suffices since we will add a barrier when
     // we publish a pointer to "x" in prev[i].
@@ -373,6 +464,103 @@ bool SkipList<Key, Comparator>::Contains(const Key& key) const {
   } else {
     return false;
   }
+}
+template <typename Key, class Comparator>
+void SkipList<Key, Comparator>::Sort( NvmArena *nvmArena, DBImpl *db) {
+ Node * node = head_->Next(0);
+ char *buf = nullptr;
+  while(node) {
+     while((buf = nvmArena->Allocate(node->len)) == nullptr) {
+      //std::this_thread::sleep_for(std::chrono::microseconds(100));
+      Log(db->options_.info_log, "sort wait nvm...\n");
+      db->mutex_.Lock();
+      db->background_work_finished_signal_sort_.Wait();
+      db->mutex_.Unlock();
+    }
+    memcpy(buf,(char*)node->key,node->len);
+    node->key = buf;
+    node = node->Next(0);
+  }
+
+}
+
+template <typename Key, class Comparator>
+void SkipList<Key, Comparator>::FirstSplit(class SkipList *&table, std::vector<void *>& split_key) {
+  for(int i = kMaxHeight -1; i>=0; i--) {
+    std::vector<void *> keys;
+    Node * node = head_;
+    while(node->Next(i) != nullptr) {
+      node = node->Next(i);
+      keys.push_back((void *)node->key);
+    }
+    if(keys.size() >= 4*FIRST_L0_THREAD_NUMBER) {
+      size_t num_segments = FIRST_L0_THREAD_NUMBER;
+      size_t base_segment_size = keys.size() / num_segments;
+      size_t remainder = keys.size() % num_segments;
+
+      size_t current_index = 0;
+      for (int j = 1; j < num_segments; j++) {
+        // 计算每个分片的大小，前 remainder 个分片分配 base_segment_size + 1 个元素
+        size_t segment_size = base_segment_size + (j <= remainder ? 1 : 0);
+        current_index += segment_size;
+
+        // 将当前分片的最后一个 key 添加到 split_key 中
+        split_key.push_back(keys[current_index - 1]);
+      }
+      break;  // 只在最高层进行分割，完成后退出
+
+    }
+  }
+  Node * head= NewNode(0,kMaxHeight,0);
+  int high = 0;
+  for(int i = kMaxHeight -1; i>=0; i--) {
+    head->SetNext(i,head_->Next(i));
+    head_->SetNext(i, nullptr);
+    if(high < i+1) {
+      high = i +1;
+    }
+  }
+  max_height_ = 1;
+  table =new SkipList(compare_,arena_,head,high);
+}
+
+template <typename Key, class Comparator>
+void SkipList<Key, Comparator>::Split(const Key& start, const Key &end, class SkipList *&table,bool is_start, bool is_end) {
+  Node * node = head_->Next(0);
+  Node *prev1[kMaxHeight]={nullptr}, *prev2[kMaxHeight]={nullptr};
+  if(is_start) {
+    for(int i =0;i<kMaxHeight;i++) {
+      prev1[i]=head_;
+    }
+  } else {
+    FindGreaterOrEqual(start,prev1);
+  }
+
+  if(!is_end) {
+    FindGreaterOrEqual(end, prev2);
+  }
+  Node * head= NewNode(0,kMaxHeight,0);
+  size_t high = 0;
+  for(int i = 0; i <kMaxHeight; i++) {
+    if(prev1[i]->Next(i) == nullptr || is_end || KeyIsAfterNode(end,prev1[i]->Next(i))) {
+      head->NoBarrier_SetNext(i,prev1[i]->NoBarrier_Next(i));
+      high = i + 1;
+    } else{
+      head->NoBarrier_SetNext(i, nullptr);
+    }
+  }
+  for(int i =0; i <kMaxHeight; i++) {
+    if (is_end) {
+      prev1[i]->NoBarrier_SetNext(i, nullptr);
+    } else if(prev1[i] != prev2[i]) {
+      prev1[i]->NoBarrier_SetNext(i,prev2[i]->NoBarrier_Next(i));
+      prev2[i]->NoBarrier_SetNext(i, nullptr);
+    } else{
+      break;
+    }
+  }
+  table =new SkipList(compare_,arena_,head,high);
+
 }
 
 }  // namespace leveldb

@@ -47,7 +47,7 @@ class LEVELDB_EXPORT Slice {
 
   // Return the length (in bytes) of the referenced data
   size_t size() const { return size_; }
-
+  void SetSize(size_t size) {size_ =size;}
   // Return true iff the length of the referenced data is zero
   bool empty() const { return size_ == 0; }
 
@@ -73,7 +73,7 @@ class LEVELDB_EXPORT Slice {
 
   // Return a string that contains the copy of the referenced data.
   std::string ToString() const { return std::string(data_, size_); }
-
+  std::string ToStringMy() const { return std::string(data_, size_ - 8); }
   // Three-way comparison.  Returns value:
   //   <  0 iff "*this" <  "b",
   //   == 0 iff "*this" == "b",

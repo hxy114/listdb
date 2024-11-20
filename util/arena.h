@@ -33,6 +33,18 @@ class Arena {
   size_t MemoryUsage() const {
     return memory_usage_.load(std::memory_order_relaxed);
   }
+  void Ref() { ++refs_; }
+
+  // Drop reference count.  Delete if no more references exist.
+  bool Unref() {
+    --refs_;
+    assert(refs_ >= 0);
+    if (refs_ <= 0) {
+      delete this;
+      return true;
+    }
+    return false;
+  }
 
  private:
   char* AllocateFallback(size_t bytes);
@@ -50,6 +62,7 @@ class Arena {
   // TODO(costan): This member is accessed via atomics, but the others are
   //               accessed without any locking. Is this OK?
   std::atomic<size_t> memory_usage_;
+  int refs_;
 };
 
 inline char* Arena::Allocate(size_t bytes) {

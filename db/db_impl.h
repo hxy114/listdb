@@ -9,6 +9,7 @@
 #include <deque>
 #include <set>
 #include <string>
+#include <list>
 
 #include "db/dbformat.h"
 #include "db/log_writer.h"
@@ -40,6 +41,7 @@ class DBImpl : public DB {
              const Slice& value) override;
   Status Delete(const WriteOptions&, const Slice& key) override;
   Status Write(const WriteOptions& options, WriteBatch* updates) override;
+  bool Get(std::vector<MemTable*> &list, const LookupKey& key, std::string* value, Status* s);
   Status Get(const ReadOptions& options, const Slice& key,
              std::string* value) override;
   Iterator* NewIterator(const ReadOptions&) override;
@@ -71,8 +73,9 @@ class DBImpl : public DB {
   // bytes.
   void RecordReadSample(Slice key);
 
- private:
+ public:
   friend class DB;
+  friend class MemTable;
   struct CompactionState;
   struct Writer;
 
@@ -101,6 +104,10 @@ class DBImpl : public DB {
     int64_t bytes_written;
   };
 
+  Iterator* NewInternalIteratorL0(const ReadOptions& options,
+                                          SequenceNumber* latest_snapshot,
+                                          uint32_t* seed);
+
   Iterator* NewInternalIterator(const ReadOptions&,
                                 SequenceNumber* latest_snapshot,
                                 uint32_t* seed);
@@ -117,6 +124,7 @@ class DBImpl : public DB {
 
   // Delete any unneeded files and stale in-memory entries.
   void RemoveObsoleteFiles() EXCLUSIVE_LOCKS_REQUIRED(mutex_);
+  void RemoveObsoleteFilesL0() EXCLUSIVE_LOCKS_REQUIRED(mutex_);
 
   // Compact the in-memory write buffer to disk.  Switches to a new
   // log-file/memtable and writes a new descriptor iff successful.
@@ -138,17 +146,38 @@ class DBImpl : public DB {
   void RecordBackgroundError(const Status& s);
 
   void MaybeScheduleCompaction() EXCLUSIVE_LOCKS_REQUIRED(mutex_);
+  void MaybeScheduleCompactionL0() EXCLUSIVE_LOCKS_REQUIRED(mutex_);
   static void BGWork(void* db);
+  static void BGWorkL0(void* db);
   void BackgroundCall();
+  void BackgroundCallL0();
   void BackgroundCompaction() EXCLUSIVE_LOCKS_REQUIRED(mutex_);
+  bool BackgroundCompactionL0() EXCLUSIVE_LOCKS_REQUIRED(mutex_);
+  void BackgroundTableCompaction();
+  bool HaveCompaction();
+  void BackGroundTableSort();
+  bool GenerateCompaction();
+  void GetCompactionRange(std::string &start_key,std::string &end_key, bool &is_start, bool &is_end);
   void CleanupCompaction(CompactionState* compact)
+      EXCLUSIVE_LOCKS_REQUIRED(mutex_);
+  void CleanupCompactionL0(CompactionState* compact)
       EXCLUSIVE_LOCKS_REQUIRED(mutex_);
   Status DoCompactionWork(CompactionState* compact)
       EXCLUSIVE_LOCKS_REQUIRED(mutex_);
 
+  Status DoCompactionWorkL0(CompactionState* compact)
+      EXCLUSIVE_LOCKS_REQUIRED(mutex_);
+  void DoSubCompactionWorkL0(CompactionState* compact, int k, Iterator * input, std::vector<Status> &status);
+
   Status OpenCompactionOutputFile(CompactionState* compact);
+  Status OpenCompactionOutputFileSub(CompactionState* compact,int k);
   Status FinishCompactionOutputFile(CompactionState* compact, Iterator* input);
+  Status FinishCompactionOutputFileL0(CompactionState* compact, Iterator* input);
+  Status FinishCompactionOutputFileL0(CompactionState* compact,
+                                              Iterator* input,int k);
   Status InstallCompactionResults(CompactionState* compact)
+      EXCLUSIVE_LOCKS_REQUIRED(mutex_);
+  Status InstallCompactionResultsL0(CompactionState* compact)
       EXCLUSIVE_LOCKS_REQUIRED(mutex_);
 
   const Comparator* user_comparator() const {
@@ -173,9 +202,18 @@ class DBImpl : public DB {
   // State below is protected by mutex_
   port::Mutex mutex_;
   std::atomic<bool> shutting_down_;
-  port::CondVar background_work_finished_signal_ GUARDED_BY(mutex_);
+  port::CondVar background_work_finished_signal_ GUARDED_BY(mutex_);//通知上层nvm可以使用
+  port::CondVar background_work_finished_signal_imm_ GUARDED_BY(mutex_);
+  port::CondVar background_work_finished_signal_sort_ GUARDED_BY(mutex_);
+  port::CondVar background_work_finished_signal_merge_ GUARDED_BY(mutex_);
+  port::CondVar background_work_finished_signal_L0_ GUARDED_BY(mutex_);
   MemTable* mem_;
   MemTable* imm_ GUARDED_BY(mutex_);  // Memtable being compacted
+  MemTable* sort_table_;
+  std::list<MemTable*> merge_imm_;
+  int merge_imm_use_pages_;
+  MemTable* big_table_;
+  std::list<MemTable*> compaction_tables_;
   std::atomic<bool> has_imm_;         // So bg thread can detect non-null imm_
   WritableFile* logfile_;
   uint64_t logfile_number_ GUARDED_BY(mutex_);
@@ -194,6 +232,7 @@ class DBImpl : public DB {
 
   // Has a background compaction been scheduled or is running?
   bool background_compaction_scheduled_ GUARDED_BY(mutex_);
+  int background_compaction_scheduled_L0_ GUARDED_BY(mutex_);
 
   ManualCompaction* manual_compaction_ GUARDED_BY(mutex_);
 
@@ -203,6 +242,12 @@ class DBImpl : public DB {
   Status bg_error_ GUARDED_BY(mutex_);
 
   CompactionStats stats_[config::kNumLevels] GUARDED_BY(mutex_);
+  bool is_first_flush_;
+  bool is_start_;
+  std::string flush_key_;
+  std::atomic<bool> sort_finish_;
+  std::atomic<bool> merge_finish_;
+  bool do_first_compacting_;
 };
 
 // Sanitize db options.  The caller should delete result.info_log if
