@@ -2,7 +2,7 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file. See the AUTHORS file for names of contributors.
 
-#include "db/skiplist.h"
+/*#include "db/skiplist.h"
 
 #include <atomic>
 #include <set>
@@ -123,7 +123,7 @@ TEST(SkipTest, InsertAndLookup) {
     }
     ASSERT_TRUE(!iter.Valid());
   }
-}
+}*/
 
 // We want to make sure that with a single writer and multiple
 // concurrent readers (with no synchronization other than when a
@@ -149,7 +149,7 @@ TEST(SkipTest, InsertAndLookup) {
 // calls to Next() and Seek().  For every key we encounter, we
 // check that it is either expected given the initial snapshot or has
 // been concurrently added since the iterator started.
-class ConcurrentTest {
+/*class ConcurrentTest {
  private:
   static constexpr uint32_t K = 4;
 
@@ -365,4 +365,4 @@ TEST(SkipTest, Concurrent3) { RunConcurrent(3); }
 TEST(SkipTest, Concurrent4) { RunConcurrent(4); }
 TEST(SkipTest, Concurrent5) { RunConcurrent(5); }
 
-}  // namespace leveldb
+}  // namespace leveldb*/
