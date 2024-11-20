@@ -140,7 +140,7 @@ size_t MergeTable(const std::map<size_t,int32_t>&free_page) {
       }
   }
   pageTableMutex.Unlock();
-  std::cout<<"freepage:"<<free_page.size()<<" "<<ret<<std::endl;
+  //std::cout<<"freepage:"<<free_page.size()<<" "<<ret<<std::endl;
   return ret;
 
 }

@@ -1285,13 +1285,13 @@ CompactionL0* VersionSet::PickCompactionL0(MemTable *memtable,std::vector<FileMe
 
   c = new CompactionL0(options_);
   c->memTable_=memtable;
-  c->input_version_ = current_;
+  c->input_version_ = current;
   //c->input_version_->Ref();
   // Compute the set of grandparent files that overlap this compaction
   // (parent == level+1; grandparent == level+2)
 
   c->inputs_=std::move(input);
-  current_->GetOverlappingInputs(2, all_start, all_limit,
+  current->GetOverlappingInputs(2, all_start, all_limit,
                                  &c->grandparents_);
 
 

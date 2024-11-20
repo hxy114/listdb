@@ -2055,6 +2055,7 @@ static void CleanupIteratorStateL0(void* arg1, void* arg2) {
     state->table[i]->Unref();
     if(state->table[i]->GetRole()== MemTable::BIGTABLE && state->table[i]->refs_ == 1) {
       state->table[i]->SetStatus(MemTable::WRITE);
+      state->table[i]->db_->background_work_finished_signal_merge_.SignalAll();
     }
 
 
@@ -2199,7 +2200,7 @@ Status DBImpl::Get(const ReadOptions& options, const Slice& key,
     compaction->Ref();
   }
   Version* current = versions_->current();
-
+  current->Ref();
   bool have_stat_update = false;
   Version::GetStats stats;
 
@@ -2227,6 +2228,7 @@ Status DBImpl::Get(const ReadOptions& options, const Slice& key,
   }
   if(big_table_ && big_table_->refs_ == 1) {
     big_table_->status_ = MemTable::READ;
+    background_work_finished_signal_merge_.SignalAll();
   }
   current->Unref();
   return s;
@@ -2427,7 +2429,7 @@ Status DBImpl::MakeRoomForWrite(bool force) {
       // case it is sharing the same core as the writer.
       mutex_.Unlock();
       Log(options_.info_log, "merge long %d,or free page small %d...\n",merge_imm_.size(), nvmManager->get_free_page_number());
-      env_->SleepForMicroseconds(1000);
+      env_->SleepForMicroseconds(500);
       allow_delay = false;  // Do not delay a single write more than once
       mutex_.Lock();
       //Log(options_.info_log, "merge long %d,or free page small %d success lock...\n",merge_imm_.size(), nvmManager->get_free_page_number());
