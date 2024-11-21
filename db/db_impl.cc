@@ -200,23 +200,23 @@ DBImpl::DBImpl(const Options& raw_options, const std::string& dbname)
 DBImpl::~DBImpl() {
   // Wait for background work to finish.
   mutex_.Lock();
-  std::cout<<"xigou kais lock"<<std::endl;
+  //std::cout<<"xigou kais lock"<<std::endl;
   shutting_down_.store(true, std::memory_order_release);
   while (background_compaction_scheduled_) {
     background_work_finished_signal_.Wait();
   }
-  std::cout<<"xigou kais1"<<std::endl;
+  //std::cout<<"xigou kais1"<<std::endl;
   while (background_compaction_scheduled_L0_) {
     background_work_finished_signal_L0_.Wait();
   }
-  std::cout<<"xigou kais2"<<std::endl;
+  //std::cout<<"xigou kais2"<<std::endl;
   background_work_finished_signal_sort_.SignalAll();
   background_work_finished_signal_merge_.SignalAll();
   mutex_.Unlock();
   while(!sort_finish_.load());
-  std::cout<<"xigou kais3"<<std::endl;
+  //std::cout<<"xigou kais3"<<std::endl;
   while(!merge_finish_.load());
-  std::cout<<"xigou kais4"<<std::endl;
+  //std::cout<<"xigou kais4"<<std::endl;
   if (db_lock_ != nullptr) {
     env_->UnlockFile(db_lock_);
   }
@@ -235,7 +235,7 @@ DBImpl::~DBImpl() {
   if (owns_cache_) {
     delete options_.block_cache;
   }
-  std::cout<<"xigou end"<<std::endl;
+  //std::cout<<"xigou end"<<std::endl;
 }
 
 Status DBImpl::NewDB() {
