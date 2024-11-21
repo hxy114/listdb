@@ -114,7 +114,7 @@ class MemTable {
   void Sort();
   void ChangeArena();
   void Compaction(std::vector<MemTable*>&tables, DBImpl *db);
-  MemTable * Split(Slice &start, Slice &end, bool is_start, bool is_end);
+  MemTable * Split(Slice &start, Slice &end, bool is_start, bool &is_end);
  private:
   friend class MemTableIterator;
   friend class MemTableBackwardIterator;
