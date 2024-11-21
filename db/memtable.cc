@@ -1,7 +1,7 @@
 // Copyright (c) 2011 The LevelDB Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file. See the AUTHORS file for names of contributors.
-
+#include <iostream>
 #include "db/memtable.h"
 
 #include "db/dbformat.h"
@@ -38,7 +38,9 @@ MemTable::MemTable(const InternalKeyComparator& comparator, Table* table, DBImpl
 
 MemTable::~MemTable() {
   assert(refs_ == 0);
-  if(role_ == COMPACTTABLED && MergeTable(pages_) > 0) {
+  int n  = 0;
+  if(role_ == COMPACTTABLED && (n = MergeTable(pages_)) > 0) {
+    Log(db_->options_.info_log, "page number:%d, free page number:%d",pages_.size(),n);
     db_->background_work_finished_signal_sort_.SignalAll();
   }
 }
@@ -252,7 +254,7 @@ void MemTable::Compaction(std::vector<MemTable*>&tables, DBImpl * db) {
     delete iter;
   }
 }
-MemTable * MemTable::Split(Slice &start, Slice &end,bool is_start, bool is_end) {
+MemTable * MemTable::Split(Slice &start, Slice &end,bool is_start, bool &is_end) {
   Table  *new_table = nullptr;
   if(db_->is_first_flush_) {
     std::vector<void *>result;
@@ -270,14 +272,19 @@ MemTable * MemTable::Split(Slice &start, Slice &end,bool is_start, bool is_end) 
     return memTable;
   } else {
     LookupKey s_k(start,0),e_k(end,0);
-    table_.Split(s_k.memtable_key().data(), e_k.memtable_key().data(),new_table,is_start,is_end);
-    MemTable * memTable =new MemTable(comparator_.comparator,new_table,db_, false,PEDDINGCOMPACT);
-    auto iter = memTable->NewIterator();
-    iter->SeekToFirst();
-    memTable->start_key_ = iter->key().ToStringMy();
-    iter->SeekToLast();
-    memTable->end_key_ = iter->key().ToStringMy();
-    return memTable;
+    if(table_.Split(s_k.memtable_key().data(), e_k.memtable_key().data(),new_table,is_start,is_end)) {
+      MemTable * memTable =new MemTable(comparator_.comparator,new_table,db_, false,PEDDINGCOMPACT);
+      auto iter = memTable->NewIterator();
+      iter->SeekToFirst();
+      memTable->start_key_ = iter->key().ToStringMy();
+      iter->SeekToLast();
+      memTable->end_key_ = iter->key().ToStringMy();
+      return memTable;
+    } else {
+      return nullptr;
+    }
+
+
   }
 
 

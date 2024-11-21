@@ -63,7 +63,7 @@ class SkipList {
   void Insert(const Key& key,size_t encoded_len,Node **pre);
   void Sort(NvmArena * nvmArena, DBImpl *db);
   void FirstSplit(class SkipList *&table, std::vector<void *>& split_key);
-  void Split(const Key& start, const Key &end, class SkipList *&table, bool is_start, bool is_end);
+  bool Split(const Key& start, const Key &end, class SkipList *&table, bool is_start, bool &is_end);
   // Returns true iff an entry that compares equal to key is in the list.
   bool Contains(const Key& key) const;
 
@@ -525,7 +525,7 @@ void SkipList<Key, Comparator>::FirstSplit(class SkipList *&table, std::vector<v
 }
 
 template <typename Key, class Comparator>
-void SkipList<Key, Comparator>::Split(const Key& start, const Key &end, class SkipList *&table,bool is_start, bool is_end) {
+bool SkipList<Key, Comparator>::Split(const Key& start, const Key &end, class SkipList *&table,bool is_start, bool &is_end) {
   Node * node = head_->Next(0);
   Node *prev1[kMaxHeight]={nullptr}, *prev2[kMaxHeight]={nullptr};
   if(is_start) {
@@ -559,7 +559,16 @@ void SkipList<Key, Comparator>::Split(const Key& start, const Key &end, class Sk
       break;
     }
   }
-  table =new SkipList(compare_,arena_,head,high);
+  if (head_->Next(0) == nullptr) {
+    is_end = true;
+  }
+  if(head->Next(0) != nullptr) {
+    table =new SkipList(compare_,arena_,head,high);
+    return true;
+  } else {
+    return false;
+  }
+
 
 }
 

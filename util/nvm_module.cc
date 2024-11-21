@@ -27,7 +27,7 @@ const uint32_t INVALID=0x00;
 
 const bool IS_FLUSH=true;
 
-const uint64_t L0_THREAD_NUMBER=1;
+const uint64_t L0_THREAD_NUMBER=3;
 const uint64_t FIRST_L0_THREAD_NUMBER = 3;
 
 

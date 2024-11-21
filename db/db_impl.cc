@@ -1050,9 +1050,9 @@ void DBImpl::GetCompactionRange(std::string &start_key,std::string &end_key, boo
   if(files.size() <20) {
     last_index = first_index +1;
   } else {
-    last_index = first_index + files.size() / 7 ;
-    //last_index = first_index + files.size() / 7 >10 ? 10: files.size() / 7;
-    if(last_index >= files.size()) {
+    //last_index = first_index + files.size() / 7 ;
+    last_index = first_index + (files.size() / 7 >5 ? 5: files.size() / 7);
+    if(last_index >= files.size() - 1) {
       is_end = true;
     } else {
       end_key = files[last_index]->largest.user_key().ToString();
@@ -1067,8 +1067,9 @@ void DBImpl::GetCompactionRange(std::string &start_key,std::string &end_key, boo
 bool DBImpl::GenerateCompaction() {
   if(is_first_flush_) {
     Slice start, end;
+    bool is_end = true;
     //mutex_.Unlock();
-    MemTable * new_table=big_table_->Split(start, end, true, true);
+    MemTable * new_table=big_table_->Split(start, end, true, is_end);
    // mutex_.Lock();
     compaction_tables_.push_back(new_table);
     new_table->Ref();
@@ -1079,29 +1080,36 @@ bool DBImpl::GenerateCompaction() {
     do_first_compacting_ = true;
     return true;
   } else {
-    std::string start, end;
-    bool is_start, is_end=false;
-    is_start = is_start_;
-    start = flush_key_;
-    GetCompactionRange(start, end,is_start, is_end);
-    //mutex_.Unlock();
-    Slice sk(start),ek(end);
-    MemTable * new_table=big_table_->Split(sk, ek,is_start,is_end);
-    //mutex_.Lock();
-    compaction_tables_.push_back(new_table);
-    new_table->Ref();
-    //background_work_finished_signal_L0_.SignalAll();
-    //mutex_.Unlock();
-    if(is_end) {
-      is_start_ = true;
-      flush_key_.clear();
-    } else {
-      is_start_ =false;
-      flush_key_ = end;
+    MemTable * new_table= nullptr;
+    bool ret_end = false;
+    while(new_table == nullptr) {
+      std::string start, end;
+      bool is_start, is_end=false;
+      is_start = is_start_;
+      start = flush_key_;
+      GetCompactionRange(start, end,is_start, is_end);
+      //mutex_.Unlock();
+      Slice sk(start),ek(end);
+      new_table=big_table_->Split(sk, ek,is_start,is_end);
+
+      //mutex_.Lock();
+
+      //background_work_finished_signal_L0_.SignalAll();
+      //mutex_.Unlock();
+      if(is_end) {
+        is_start_ = true;
+        flush_key_.clear();
+        ret_end = true;
+      } else {
+        is_start_ =false;
+        flush_key_ = end;
+      }
 
     }
+    compaction_tables_.push_back(new_table);
+    new_table->Ref();
     MaybeScheduleCompactionL0();
-    return is_end;
+    return ret_end;
   }
 
 }
