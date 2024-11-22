@@ -1106,6 +1106,9 @@ bool DBImpl::GenerateCompaction() {
       }
 
     }
+    if(new_table->is_first_flush_) {
+      do_first_compacting_=true;
+    }
     compaction_tables_.push_back(new_table);
     new_table->Ref();
     MaybeScheduleCompactionL0();
@@ -1132,6 +1135,7 @@ void DBImpl::BackGroundTableSort() {
       //Log(options_.info_log, "sort start2 lock");
       mem->SetRole(MemTable::PEDDINGMERGE);
       merge_imm_.push_back(mem);
+      merge_imm_use_pages_ += mem->nvmArena_->pages.size();
       sort_table_= nullptr;
       background_work_finished_signal_imm_.SignalAll();
       background_work_finished_signal_merge_.SignalAll();
@@ -1189,8 +1193,10 @@ void DBImpl::BackgroundTableCompaction() {
       //Log(options_.info_log, "compaction start2 lock");
       for(int i =0;i<tables.size();i++) {
         merge_imm_.pop_front();
+        merge_imm_use_pages_ -= tables[i]->nvmArena_->pages.size();
         tables[i]->SetRole(MemTable::MERGED);
         tables[i]->Unref();
+
 
       }
     }

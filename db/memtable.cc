@@ -204,6 +204,7 @@ void MemTable::Compaction(std::vector<MemTable*>&tables, DBImpl * db) {
   input->SeekToFirst();
   //Table ::Node *pre[Table::kMaxHeight];
   int count =0;
+  Table::Node *prev[Table::kMaxHeight]={nullptr};
   while (input->Valid()) {
     Slice key = input->mykey();
     Slice value = input->value();
@@ -225,13 +226,20 @@ void MemTable::Compaction(std::vector<MemTable*>&tables, DBImpl * db) {
     if(count >100000) {
       db_->mutex_.Lock();
       //Log(db_->options_.info_log, "merge compaction  lock");
+      bool have = false;
       while(db->HaveCompaction()) {
         bool result = db->GenerateCompaction();
         if(result) {
           ChangeArena();
-
+        }
+        have = true;
+      }
+      if (have) {
+        for(int i = 0; i <Table::kMaxHeight; i++) {
+          prev[i] = table_.head_;
         }
       }
+
       db_->mutex_.Unlock();
       count = 0;
     }
@@ -256,7 +264,7 @@ void MemTable::Compaction(std::vector<MemTable*>&tables, DBImpl * db) {
 }
 MemTable * MemTable::Split(Slice &start, Slice &end,bool is_start, bool &is_end) {
   Table  *new_table = nullptr;
-  if(db_->is_first_flush_) {
+  if(db_->is_first_flush_ || (is_start && is_end)) {
     std::vector<void *>result;
     table_.FirstSplit(new_table,result);
     MemTable * memTable =new MemTable(comparator_.comparator,new_table,db_, true,PEDDINGCOMPACT);

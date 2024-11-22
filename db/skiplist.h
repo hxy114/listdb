@@ -128,7 +128,7 @@ class SkipList {
   // If prev is non-null, fills prev[level] with pointer to previous
   // node at "level" for every level in [0..max_height_-1].
   Node* FindGreaterOrEqual(const Key& key, Node** prev) const;
-  Node* FindGreaterOrEqual(const Key& key, const Key& end, bool is_end, Node** prev) const;
+  Node* FindGreaterOrEqualOpt(const Key& key, Node** prev) const;
 
   // Return the latest node with a key < key.
   // Return head_ if there is no such node.
@@ -302,9 +302,9 @@ SkipList<Key, Comparator>::FindGreaterOrEqual(const Key& key,
 
 template <typename Key, class Comparator>
 typename SkipList<Key, Comparator>::Node*
-SkipList<Key, Comparator>::FindGreaterOrEqual(const Key& key,const Key& end,bool is_end,
+SkipList<Key, Comparator>::FindGreaterOrEqualOpt(const Key& key,
                                               Node** prev) const {
-  Node* x = head_;
+  Node* x = prev[kMaxHeight];
   int level = GetMaxHeight() - 1;
   while (true) {
     Node* next = x->Next(level);
@@ -312,10 +312,7 @@ SkipList<Key, Comparator>::FindGreaterOrEqual(const Key& key,const Key& end,bool
       // Keep searching in this list
       x = next;
     } else {
-      if(prev[level]== nullptr &&(next == nullptr || is_end || KeyIsAfterNode(end,next))) {
-        prev[level] = x;
-      }
-      //if (prev != nullptr) prev[level] = x;
+      if (prev != nullptr) prev[level] = x;
       if (level == 0) {
         return next;
       } else {
@@ -457,6 +454,43 @@ void SkipList<Key, Comparator>::Insert(const Key& key,size_t len) {
 }
 
 template <typename Key, class Comparator>
+void SkipList<Key, Comparator>::Insert(const Key& key,size_t len, Node **prev) {
+  // TODO(opt): We can use a barrier-free variant of FindGreaterOrEqual()
+  // here since Insert() is externally synchronized.
+  //Node* prev[kMaxHeight];
+  Node* x = FindGreaterOrEqualOpt(key, prev);
+
+  // Our data structure does not allow duplicate insertion
+  assert(x == nullptr || !Equal(key, x->key));
+
+  int height = RandomHeight();
+  if (height > GetMaxHeight()) {
+    for (int i = GetMaxHeight(); i < height; i++) {
+      prev[i] = head_;
+    }
+    // It is ok to mutate max_height_ without any synchronization
+    // with concurrent readers.  A concurrent reader that observes
+    // the new value of max_height_ will see either the old value of
+    // new level pointers from head_ (nullptr), or a new value set in
+    // the loop below.  In the former case the reader will
+    // immediately drop to the next level since nullptr sorts after all
+    // keys.  In the latter case the reader will use the new node.
+    max_height_.store(height, std::memory_order_relaxed);
+  }
+
+  x = NewNode(key, height,len);
+  for (int i = 0; i < height; i++) {
+    // NoBarrier_SetNext() suffices since we will add a barrier when
+    // we publish a pointer to "x" in prev[i].
+    x->NoBarrier_SetNext(i, prev[i]->NoBarrier_Next(i));
+    prev[i]->SetNext(i, x);
+  }
+}
+
+
+
+
+template <typename Key, class Comparator>
 bool SkipList<Key, Comparator>::Contains(const Key& key) const {
   Node* x = FindGreaterOrEqual(key, nullptr);
   if (x != nullptr && Equal(key, x->key)) {
@@ -533,10 +567,16 @@ bool SkipList<Key, Comparator>::Split(const Key& start, const Key &end, class Sk
       prev1[i]=head_;
     }
   } else {
+    for(int i =0;i<kMaxHeight;i++) {
+      prev1[i]=head_;
+    }
     FindGreaterOrEqual(start,prev1);
   }
 
   if(!is_end) {
+    for(int i =0;i<kMaxHeight;i++) {
+      prev2[i]=head_;
+    }
     FindGreaterOrEqual(end, prev2);
   }
   Node * head= NewNode(0,kMaxHeight,0);
