@@ -451,6 +451,7 @@ if(LEVELDB_BUILD_BENCHMARKS)
     target_link_libraries(db_bench_sqlite3 sqlite3)
   endif(HAVE_SQLITE3)
 
+  leveldb_benchmark("benchmarks/reopen.cc")
   # check_library_exists is insufficient here because the library names have
   # different manglings when compiled with clang or gcc, at least when installed
   # with Homebrew on Mac.

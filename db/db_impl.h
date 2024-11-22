@@ -119,7 +119,8 @@ class DBImpl : public DB {
   // be made to the descriptor are added to *edit.
   Status Recover(VersionEdit* edit, bool* save_manifest)
       EXCLUSIVE_LOCKS_REQUIRED(mutex_);
-
+  void RecoverNVM()
+      EXCLUSIVE_LOCKS_REQUIRED(mutex_);
   void MaybeIgnoreError(Status* s) const;
 
   // Delete any unneeded files and stale in-memory entries.

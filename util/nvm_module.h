@@ -39,7 +39,8 @@ class NvmManager {
   ~NvmManager();
   PageHead * get_page();
   void free_page(PageHead * pm_log);
-  //std::vector<std::pair<uint64_t ,PageHead *>>&& get_recover_page_nodes();
+  std::vector<PageHead *>&& get_recover_pages();
+  bool HaveRecover();
   char *get_base();
   size_t get_free_page_number();
 
@@ -52,7 +53,7 @@ class NvmManager {
 
   std::vector<PageHead *>free_page_list_;
 
-  //std::vector<std::pair<uint64_t ,PageHead *>>recover_page_list_;
+  std::vector<PageHead *>recover_page_list_;
 
 };
 

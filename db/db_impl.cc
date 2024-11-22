@@ -188,6 +188,7 @@ DBImpl::DBImpl(const Options& raw_options, const std::string& dbname)
       seed_(0),
       tmp_batch_(new WriteBatch),
       background_compaction_scheduled_(false),
+      background_compaction_scheduled_L0_(0),
       manual_compaction_(nullptr),
       versions_(new VersionSet(dbname_, &options_, table_cache_,
                                &internal_comparator_)),
@@ -422,6 +423,11 @@ void DBImpl::RemoveObsoleteFiles() {
   //Log(options_.info_log,"delete file success lock");
 }
 
+void DBImpl::RecoverNVM(){
+  auto page_head=nvmManager->get_recover_pages();
+  big_table_->Recover(page_head);
+}
+
 Status DBImpl::Recover(VersionEdit* edit, bool* save_manifest) {
   mutex_.AssertHeld();
 
@@ -453,6 +459,7 @@ Status DBImpl::Recover(VersionEdit* edit, bool* save_manifest) {
       return Status::InvalidArgument(dbname_,
                                      "exists (error_if_exists is true)");
     }
+    nvmManager=new NvmManager(true);
   }
 
   s = versions_->Recover(save_manifest);
@@ -495,7 +502,7 @@ Status DBImpl::Recover(VersionEdit* edit, bool* save_manifest) {
   }
 
   // Recover in the order in which the logs were generated
-  std::sort(logs.begin(), logs.end());
+  /*std::sort(logs.begin(), logs.end());
   for (size_t i = 0; i < logs.size(); i++) {
     s = RecoverLogFile(logs[i], (i == logs.size() - 1), save_manifest, edit,
                        &max_sequence);
@@ -507,7 +514,7 @@ Status DBImpl::Recover(VersionEdit* edit, bool* save_manifest) {
     // records after allocating this log number.  So we manually
     // update the file number allocation counter in VersionSet.
     versions_->MarkFileNumberUsed(logs[i]);
-  }
+  }*/
 
   if (versions_->LastSequence() < max_sequence) {
     versions_->SetLastSequence(max_sequence);
@@ -2603,7 +2610,7 @@ DB::~DB() = default;
 
 Status DB::Open(const Options& options, const std::string& dbname, DB** dbptr) {
   *dbptr = nullptr;
-
+  bool recover =false;
   DBImpl* impl = new DBImpl(options, dbname);
   impl->mutex_.Lock();
   //Log(impl->options_.info_log, "open lock");
@@ -2626,6 +2633,10 @@ Status DB::Open(const Options& options, const std::string& dbname, DB** dbptr) {
       impl->mem_->Ref();
       impl->big_table_ = new MemTable(impl->internal_comparator_,impl,true, MemTable::BIGTABLE);
       impl->big_table_->Ref();
+      if(nvmManager->HaveRecover()) {
+        impl->RecoverNVM();
+        recover = true;
+      }
     }
   }
   if (s.ok() && save_manifest) {
@@ -2641,12 +2652,15 @@ Status DB::Open(const Options& options, const std::string& dbname, DB** dbptr) {
   if (s.ok()) {
     assert(impl->mem_ != nullptr);
     *dbptr = impl;
-    impl->env_->StartThread([](void* arg) {
-      static_cast<DBImpl*>(arg)->BackgroundTableCompaction();
-    }, impl);
-    impl->env_->StartThread([](void* arg) {
-      static_cast<DBImpl*>(arg)->BackGroundTableSort();
-    }, impl);
+    if(!recover) {
+      impl->env_->StartThread([](void* arg) {
+        static_cast<DBImpl*>(arg)->BackgroundTableCompaction();
+      }, impl);
+      impl->env_->StartThread([](void* arg) {
+        static_cast<DBImpl*>(arg)->BackGroundTableSort();
+      }, impl);
+    }
+
   } else {
     delete impl;
   }

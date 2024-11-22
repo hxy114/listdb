@@ -310,5 +310,21 @@ void MemTable::SetRole(Role role){
 void MemTable::SetPage(std::map<size_t, int32_t> &page) {
   pages_ = page;
 }
+void MemTable::Recover(std::vector<PageHead *> &pages) {
+  for(auto page:pages) {
+    char * kv_buffer=(char*) page+PAGE_HEAD_SIZE;
+    for(int i = 0; i < page->kv_count;i++){
+      table_.Insert(kv_buffer,0);
+      uint64_t  totollen=0;
+      uint32_t  len=0;
+      GetVarint32Ptr(kv_buffer, kv_buffer + 5, &len);
+      totollen+=VarintLength(len)+len;
+      GetVarint32Ptr(kv_buffer+totollen, kv_buffer+totollen + 5, &len);
+      totollen+=VarintLength(len)+len;
+      kv_buffer+=totollen;
+      assert(kv_buffer < (char*)page+PAGE_SIZE);
+    }
+  }
 
+}
 }  // namespace leveldb

@@ -134,6 +134,7 @@ class MemTable {
   void SetRole(Role role);
   void SetStatus(MemTable::MyStatus status);
   void SetPage(std::map<size_t, int32_t> &page);
+  void Recover(std::vector<PageHead *> &pages);
  public:
 
   ~MemTable();  // Private since only Unref() should be used to delete it

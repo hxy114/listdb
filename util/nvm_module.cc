@@ -65,46 +65,25 @@ NvmManager::NvmManager (bool is_recover_){
   page_base_=base_;
   page_base = base_;
   page_end = base_+map_len;
-  /*if(is_recover_){
+  if(is_recover_){
     //TODO recover
-    for(int i=0;i<PM_META_NODE_NUMBER;i++){
-       auto *meta_node=(MetaNode*)(base_+i*sizeof(MetaNode));
-      if(meta_node->magic_number==META_NODE_MAGIC){
-        recover_meta_nodes_.emplace_back(i*sizeof(MetaNode),meta_node);
-
+    for(int i=0;i<PAGE_NUMBER;i++){
+      PageHead *page_head=(PageHead*)(page_base + i * PAGE_SIZE);
+      if(page_head->magic_number==PAGE_MAGIC){
+        recover_page_list_.emplace_back(page_head);
       }else{
-        reset(meta_node);
-        free_meta_node_list_.emplace_back(meta_node);
+        reset(page_head);
+        free_page_list_.emplace_back(page_head);
       }
 
     }
-    for(int i=0;i<PM_LOG_NUMBER;i++){
-      PmLogHead *pm_log_head=(PmLogHead*)(pm_log_base_+i*PM_LOG_SIZE);
-      if(pm_log_head->magic_number==PM_LOG_MAGIC){
-        recover_pm_log_list_.emplace_back(PM_META_NODE_NUMBER*sizeof(MetaNode)+i*PM_LOG_SIZE,pm_log_head);
-      }else{
-        reset(pm_log_head);
-        free_pm_log_list_.emplace_back(pm_log_head);
-      }
-
-    }
-    L0_wait_=(free_pm_log_list_.size()-MAX_PARTITION)*0.3;
-    L0_stop_=0;
-
-
-
-  }else{*/
-
+  }else{
     for(int i=0;i<PAGE_NUMBER;i++){
       PageHead *page_head= (PageHead*)(page_base_+i*PAGE_SIZE);
       reset(page_head);
       free_page_list_.emplace_back(page_head);
     }
-
-
-
-
-  //}
+  }
 }
 NvmManager::~NvmManager(){
   pmem_drain();
@@ -120,8 +99,12 @@ char * NvmManager::get_base() {
 size_t NvmManager::get_free_page_number(){
   return free_page_list_.size();
 }
-
-
+std::vector<PageHead *>&& NvmManager::get_recover_pages(){
+  return std::move(recover_page_list_);
+}
+bool NvmManager::HaveRecover() {
+  return !recover_page_list_.empty();
+}
 void reset(PageHead *pm_log_head){
   pmem_memset_persist(pm_log_head,0,sizeof(PageHead));
 }
