@@ -30,8 +30,8 @@ int main(int argc, char** argv) {
   assert(db_ == nullptr);
   leveldb::Options options;
   options.env = g_env;
-  std::string path = "/tmp/leveldbtest-1000/dbbench/";
-  //std::string path = "/mnt/data_02/dbbench";
+  //std::string path = "/tmp/leveldbtest-1000/dbbench/";
+  std::string path = "/mnt/data_02/dbbench";
   const uint64_t start_micros = g_env->NowMicros();
   leveldb::Status s = leveldb::DB::Open(options, path, &db_);
   std::cout << g_env->NowMicros() - start_micros<<std::endl;
