@@ -1161,7 +1161,7 @@ bool DBImpl::HaveCompaction() {
   } else {
     if(do_first_compacting_) {
       return false;
-    }else if(compaction_tables_.size() < L0_THREAD_NUMBER /*+ 2*/ && PAGE_NUMBER - nvmManager->get_free_page_number() - merge_imm_use_pages_ >= 4 * 1024 * 1024 * 1024UL / PAGE_SIZE) {
+    }else if(compaction_tables_.size() < L0_THREAD_NUMBER /*+ 2*/ && PAGE_NUMBER - nvmManager->get_free_page_number() - merge_imm_use_pages_ /*- background_compaction_scheduled_L0_ * 300 */>= 4 * 1024 * 1024 * 1024UL / PAGE_SIZE) {
       return true;
     }
     return false;
@@ -2241,7 +2241,7 @@ Status DBImpl::Get(const ReadOptions& options, const Slice& key,
     table->Unref();
   }
   if(big_table_ && big_table_->refs_ == 1) {
-    big_table_->status_ = MemTable::READ;
+    big_table_->status_ = MemTable::WRITE;
     background_work_finished_signal_merge_.SignalAll();
   }
   current->Unref();

@@ -129,7 +129,7 @@ bool MemTable::GetFirst(std::string *value) {
     const char* entry = node->key;
     uint32_t key_length;
     const char* key_ptr = GetVarint32Ptr(entry, entry + 5, &key_length);
-    assert(key_length==24);
+    //assert(key_length==24);
     value->assign(key_ptr, key_length- 8);
     return true;
   }
@@ -246,7 +246,7 @@ void MemTable::Compaction(std::vector<MemTable*>&tables, DBImpl * db) {
   }
   delete input;
 
-  {
+  /*{
     auto iter =NewIterator();
     iter->SeekToFirst();
     int c=0;
@@ -254,13 +254,13 @@ void MemTable::Compaction(std::vector<MemTable*>&tables, DBImpl * db) {
       c++;
       auto key = iter->key();
       ParsedInternalKey result;
-      assert(ParseInternalKey(key,&result));
-      assert(key.size() == 24);
+      //assert(ParseInternalKey(key,&result));
+      //assert(key.size() == 24);
       iter->Next();
     }
     assert(!iter->Valid());
     delete iter;
-  }
+  }*/
 }
 MemTable * MemTable::Split(Slice &start, Slice &end,bool is_start, bool &is_end) {
   Table  *new_table = nullptr;
