@@ -113,7 +113,7 @@ struct LEVELDB_EXPORT Options {
   // compactions and hence longer latency/performance hiccups.
   // Another reason to increase this parameter might be when you are
   // initially populating a large database.
-  size_t max_file_size = 32 * 1024 * 1024;
+  size_t max_file_size = 1 * 1024 * 1024;
 
   // Compress blocks using the specified compression algorithm.  This
   // parameter can be changed dynamically.
@@ -145,6 +145,7 @@ struct LEVELDB_EXPORT Options {
   // Many applications will benefit from passing the result of
   // NewBloomFilterPolicy() here.
   const FilterPolicy* filter_policy = nullptr;
+  size_t max_kv_file_size = 64 * 1024 * 1024;
 };
 
 // Options that control read operations

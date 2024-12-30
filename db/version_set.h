@@ -406,6 +406,7 @@ class CompactionL0 {
   // "which" must be either 0 or 1
   int num_input_filesL1() const { return inputs_.size(); }
   int num_input_filesL0() const { return 1; }
+  uint64_t MaxKVFileSize() const { return max_kv_file_size_; }
   // Return the ith input file at "level()+which" ("which" must be 0 or 1).
   FileMetaData* inputL1(int i) const { return inputs_[i]; }
   MemTable* inputL0( ) const { return memTable_; }
@@ -442,6 +443,7 @@ class CompactionL0 {
 
   int level_;
   uint64_t max_output_file_size_;
+  uint64_t  max_kv_file_size_;
   Version* input_version_;
   VersionEdit edit_;
 

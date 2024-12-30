@@ -86,7 +86,9 @@ struct DBImpl::CompactionState {
         outfile(nullptr),
         builder(nullptr),
         total_bytes(0),
-        compactionL0(nullptr){}
+        compactionL0(nullptr),
+        vWriters(FIRST_L0_THREAD_NUMBER, nullptr),
+        vlog_numbers(FIRST_L0_THREAD_NUMBER, -1){}
   explicit CompactionState(CompactionL0* c)
       : compaction(nullptr),
         smallest_snapshot(0),
@@ -97,7 +99,9 @@ struct DBImpl::CompactionState {
         outfiles(FIRST_L0_THREAD_NUMBER, nullptr),
         builders(FIRST_L0_THREAD_NUMBER, nullptr),
         outputss(FIRST_L0_THREAD_NUMBER,std::vector<Output>()),
-        pages_(FIRST_L0_THREAD_NUMBER){}
+        pages_(FIRST_L0_THREAD_NUMBER),
+        vWriters(FIRST_L0_THREAD_NUMBER, nullptr),
+        vlog_numbers(FIRST_L0_THREAD_NUMBER, -1){}
 
   Compaction* const compaction;
   CompactionL0* const compactionL0;
@@ -119,6 +123,8 @@ struct DBImpl::CompactionState {
   std::map<size_t ,int32_t>page_;
   std::vector<std::map<size_t ,int32_t>>pages_;
   port::Mutex mutex;
+  std::vector<vlog::VWriter*>vWriters;
+  std::vector<uint64_t>vlog_numbers;
 };
 
 // Fix user-supplied options to be reasonable
@@ -1053,12 +1059,13 @@ void DBImpl::GetCompactionRange(std::string &start_key,std::string &end_key, boo
   } else {
     //last_index = first_index + files.size() / 7 ;
     last_index = first_index + (files.size() / 7 >5 ? 5: files.size() / 7);
-    if(last_index >= files.size() - 1) {
-      is_end = true;
-    } else {
-      end_key = files[last_index]->largest.user_key().ToString();
-    }
 
+
+  }
+  if(last_index >= files.size() - 1) {
+    is_end = true;
+  } else {
+    end_key = files[last_index]->largest.user_key().ToString();
   }
   //mutex_.Lock();
  // current->Unref();
@@ -1150,7 +1157,7 @@ void DBImpl::BackGroundTableSort() {
 
 }
 bool DBImpl::HaveCompaction() {
-  if(big_table_->status_ == MemTable::READ) {
+  if(big_table_->status_ == MemTable::READ||big_table_->is_empty()) {
     return false;
   }
   if(is_first_flush_) {
@@ -1294,7 +1301,21 @@ Status DBImpl::OpenCompactionOutputFileSub(CompactionState* compact,int k) {
   }
   return s;
 }
+Status DBImpl::OpenCompactionVlog(CompactionState* compact,int k) {
+  assert(compact != nullptr);
+  assert(compact->vWriters[k] == nullptr);
+  uint64_t file_number;
+  {
+    mutex_.Lock();
+    file_number = versions_->NewFileNumber();
+    mutex_.Unlock();
+  }
+  auto vwrite=vlog_manager_.AddVlog(dbname_,options_,file_number);
+  compact->vlog_numbers[k]=file_number;
+  compact->vWriters[k] = vwrite;
 
+  return Status::OK();
+}
 Status DBImpl::OpenCompactionOutputFile(CompactionState* compact) {
   assert(compact != nullptr);
   assert(compact->builder == nullptr);
@@ -1374,7 +1395,31 @@ Status DBImpl::FinishCompactionOutputFileL0(CompactionState* compact,
   }
   return s;
 }
+Status DBImpl::FinishCompactionKVFile(CompactionState* compact,
+                                      Iterator* input,int k) {
+  assert(compact != nullptr);
+  assert(compact->vWriters[k] != nullptr);
 
+
+
+
+  // Check for iterator errors
+  Status s = input->status();
+  if (s.ok()) {
+
+    const uint64_t current_bytes = compact->vWriters[k]->FileSize();
+    compact->mutex.Lock();
+    compact->total_bytes += current_bytes;
+    compact->mutex.Unlock();
+    compact->vWriters[k]->Close();
+  } else {
+    exit(10);
+  }
+
+  compact->vWriters[k] = nullptr;
+  compact->vlog_numbers[k]=-1;
+  return s;
+}
 Status DBImpl::FinishCompactionOutputFileL0(CompactionState* compact,
                                             Iterator* input) {
   assert(compact != nullptr);
@@ -1534,8 +1579,10 @@ void DBImpl::DoSubCompactionWorkL0(CompactionState* compact, int k, Iterator * i
   ParsedInternalKey ikey;
   std::string current_user_key;
   bool has_current_user_key = false;
+  bool is_kv=false;
   SequenceNumber last_sequence_for_key = kMaxSequenceNumber;
   while (input->Valid() && !shutting_down_.load(std::memory_order_acquire)) {
+    is_kv=false;
     Slice key = input->key();
     if (compact->compactionL0->ShouldStopBeforeSub(key, k) &&
         compact->builders[k] != nullptr) {
@@ -1557,6 +1604,7 @@ void DBImpl::DoSubCompactionWorkL0(CompactionState* compact, int k, Iterator * i
     }else {
       if (key.data() >= page_base && key.data() <= page_end) {
         compact->pages_[k][(key.data() - page_base) / PAGE_SIZE]--;
+        is_kv=true;
       }
       if (!has_current_user_key ||
           user_comparator()->Compare(ikey.user_key, Slice(current_user_key)) !=
@@ -1603,16 +1651,55 @@ void DBImpl::DoSubCompactionWorkL0(CompactionState* compact, int k, Iterator * i
           break;
         }
       }
+      if (compact->vWriters[k] == nullptr) {
+        status[k] = OpenCompactionVlog(compact,k);
+        if (!status[k].ok()) {
+          break;
+        }
+      }
       if (compact->builders[k]->NumEntries() == 0) {
         compact->current_outputsub(k)->smallest.DecodeFrom(key);
       }
       compact->current_outputsub(k)->largest.DecodeFrom(key);
-      compact->builders[k]->Add(key, input->value());
+
+      if(is_kv){
+        if(ikey.type==kTypeValue){
+          std::string rep;
+          rep.push_back(static_cast<char>(kTypeValue));
+          PutLengthPrefixedSlice(&rep, ikey.user_key);
+          PutLengthPrefixedSlice(&rep, input->value());
+          uint64_t addr= compact->vWriters[k]->AddRecord(rep);
+          std::string address;
+          size_t size=rep.size();
+
+          PutVarint64(&address, compact->vlog_numbers[k]);
+          PutVarint64(&address, addr);
+          PutVarint64(&address, size);
+          compact->builders[k]->Add(key,address);
+        }else{
+          compact->builders[k]->Add(key, input->value());
+        }
+
+        //TODO kv分离
+      }else{
+        compact->builders[k]->Add(key, input->value());
+      }
+
+
+
+      //compact->builders[k]->Add(key, input->value());
 
       // Close output file if it is big enough
       if (compact->builders[k]->FileSize() >=
           compact->compactionL0->MaxOutputFileSize()) {
         status[k] = FinishCompactionOutputFileL0(compact, input,k);
+        if (!status[k].ok()) {
+          break;
+        }
+      }
+      if (compact->vWriters[k]->FileSize() >=
+          compact->compactionL0->MaxKVFileSize()) {
+        status[k] = FinishCompactionKVFile(compact, input,k);
         if (!status[k].ok()) {
           break;
         }
@@ -1627,6 +1714,9 @@ void DBImpl::DoSubCompactionWorkL0(CompactionState* compact, int k, Iterator * i
   }
   if (status[k].ok() && compact->builders[k] != nullptr) {
     status[k] = FinishCompactionOutputFileL0(compact, input,k);
+  }
+  if (status[k].ok() && compact->vWriters[k] != nullptr) {
+    status[k] = FinishCompactionKVFile(compact, input,k);
   }
   if (status[k].ok()) {
     status[k] = input->status();
@@ -1728,11 +1818,14 @@ Status DBImpl::DoCompactionWorkL0(CompactionState* compact){
     ParsedInternalKey ikey;
     std::string current_user_key;
     bool has_current_user_key = false;
+    bool is_kv=false;
     SequenceNumber last_sequence_for_key = kMaxSequenceNumber;
     while (input->Valid() && !shutting_down_.load(std::memory_order_acquire)) {
       Slice key = input->key();
+      is_kv = false;
       if (key.data() >= page_base && key.data() <= page_end) {
         compact->page_[(key.data() - page_base) / PAGE_SIZE]--;
+        is_kv = true;
       }
       if (compact->compactionL0->ShouldStopBefore(key) &&
           compact->builder != nullptr) {
@@ -1795,16 +1888,51 @@ Status DBImpl::DoCompactionWorkL0(CompactionState* compact){
             break;
           }
         }
+        if (compact->vWriters[0] == nullptr) {
+          status = OpenCompactionVlog(compact,0);
+          if (!status.ok()) {
+            break;
+          }
+        }
         if (compact->builder->NumEntries() == 0) {
           compact->current_output()->smallest.DecodeFrom(key);
         }
         compact->current_output()->largest.DecodeFrom(key);
-        compact->builder->Add(key, input->value());
+        if(is_kv){
+          if(ikey.type==kTypeValue){
+            std::string rep;
+            rep.push_back(static_cast<char>(kTypeValue));
+            PutLengthPrefixedSlice(&rep, ikey.user_key);
+            PutLengthPrefixedSlice(&rep, input->value());
+            uint64_t addr= compact->vWriters[0]->AddRecord(rep);
+            std::string address;
+            size_t size=rep.size();
+
+            PutVarint64(&address, compact->vlog_numbers[0]);
+            PutVarint64(&address, addr);
+            PutVarint64(&address, size);
+            compact->builder->Add(key,address);
+          }else{
+            compact->builder->Add(key, input->value());
+          }
+
+          //TODO kv分离
+        }else{
+          compact->builder->Add(key, input->value());
+        }
+        //compact->builder->Add(key, input->value());
 
         // Close output file if it is big enough
         if (compact->builder->FileSize() >=
             compact->compactionL0->MaxOutputFileSize()) {
           status = FinishCompactionOutputFileL0(compact, input);
+          if (!status.ok()) {
+            break;
+          }
+        }
+        if (compact->vWriters[0]->FileSize() >=
+            compact->compactionL0->MaxKVFileSize()) {
+          status = FinishCompactionKVFile(compact, input,0);
           if (!status.ok()) {
             break;
           }
@@ -1820,6 +1948,9 @@ Status DBImpl::DoCompactionWorkL0(CompactionState* compact){
     }
     if (status.ok() && compact->builder != nullptr) {
       status = FinishCompactionOutputFileL0(compact, input);
+    }
+    if (status.ok() && compact->vWriters[0] != nullptr) {
+      status = FinishCompactionKVFile(compact, input,0);
     }
     if (status.ok()) {
       status = input->status();
@@ -2218,7 +2349,7 @@ Status DBImpl::Get(const ReadOptions& options, const Slice& key,
   current->Ref();
   bool have_stat_update = false;
   Version::GetStats stats;
-
+  std::string midkey;
   // Unlock while reading from files and memtables
   {
     mutex_.Unlock();
@@ -2227,8 +2358,12 @@ Status DBImpl::Get(const ReadOptions& options, const Slice& key,
     if(!list.empty() && Get(list,lkey, value, &s)) {
       // Done
     } else {
-      s = current->Get(options, lkey, value, &stats);
+      s = current->Get(options, lkey, &midkey, &stats);
       have_stat_update = true;
+      if(s.ok()){
+        //TODO 读另一个文件
+        vlog_manager_.FetchValueFromVlog(midkey,value);
+      }
     }
     mutex_.Lock();
     //Log(options_.info_log, "get lock");

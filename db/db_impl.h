@@ -18,6 +18,7 @@
 #include "leveldb/env.h"
 #include "port/port.h"
 #include "port/thread_annotations.h"
+#include "db/vlog_manager.h"
 
 namespace leveldb {
 
@@ -171,10 +172,12 @@ class DBImpl : public DB {
 
   Status OpenCompactionOutputFile(CompactionState* compact);
   Status OpenCompactionOutputFileSub(CompactionState* compact,int k);
+  Status OpenCompactionVlog(CompactionState* compact,int k);
   Status FinishCompactionOutputFile(CompactionState* compact, Iterator* input);
   Status FinishCompactionOutputFileL0(CompactionState* compact, Iterator* input);
   Status FinishCompactionOutputFileL0(CompactionState* compact,
                                               Iterator* input,int k);
+  Status FinishCompactionKVFile(CompactionState* compact, Iterator* input,int k);
   Status InstallCompactionResults(CompactionState* compact)
       EXCLUSIVE_LOCKS_REQUIRED(mutex_);
   Status InstallCompactionResultsL0(CompactionState* compact)
@@ -248,6 +251,7 @@ class DBImpl : public DB {
   std::atomic<bool> sort_finish_;
   std::atomic<bool> merge_finish_;
   bool do_first_compacting_;
+  vlog::VlogManager vlog_manager_;
 };
 
 // Sanitize db options.  The caller should delete result.info_log if

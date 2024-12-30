@@ -538,6 +538,19 @@ class PosixEnv : public Env {
     return Status::OK();
   }
 
+  Status NewNonMmapRandomAccessFile(const std::string& filename,
+                                    RandomAccessFile** result) override {
+    *result = nullptr;
+    int fd = ::open(filename.c_str(), O_RDONLY | kOpenBaseFlags);
+    if (fd < 0) {
+      return PosixError(filename, errno);
+    }
+
+    *result = new PosixRandomAccessFile(filename, fd, &fd_limiter_);
+    return Status::OK();
+  }
+
+
   Status NewRandomAccessFile(const std::string& filename,
                              RandomAccessFile** result) override {
     *result = nullptr;

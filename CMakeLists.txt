@@ -194,6 +194,12 @@ target_sources(leveldb
     "util/nvm_module.cc"
     "util/nvm_arena.h"
     "util/nvm_arena.cc"
+    "db/vlog_writer.h"
+    "db/vlog_writer.cc"
+    "db/vlog_manager.h"
+    "db/vlog_manager.cc"
+    "db/vlog_fetcher.h"
+    "db/vlog_fetcher.cc"
 
   # Only CMake 3.3+ supports PUBLIC sources in targets exported by "install".
   $<$<VERSION_GREATER:CMAKE_VERSION,3.2>:PUBLIC>
