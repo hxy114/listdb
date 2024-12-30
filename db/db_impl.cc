@@ -1053,12 +1053,13 @@ void DBImpl::GetCompactionRange(std::string &start_key,std::string &end_key, boo
   } else {
     //last_index = first_index + files.size() / 7 ;
     last_index = first_index + (files.size() / 7 >5 ? 5: files.size() / 7);
-    if(last_index >= files.size() - 1) {
-      is_end = true;
-    } else {
-      end_key = files[last_index]->largest.user_key().ToString();
-    }
 
+
+  }
+  if(last_index >= files.size() - 1) {
+    is_end = true;
+  } else {
+    end_key = files[last_index]->largest.user_key().ToString();
   }
   //mutex_.Lock();
  // current->Unref();
@@ -1150,7 +1151,7 @@ void DBImpl::BackGroundTableSort() {
 
 }
 bool DBImpl::HaveCompaction() {
-  if(big_table_->status_ == MemTable::READ) {
+  if(big_table_->status_ == MemTable::READ||big_table_->is_empty()) {
     return false;
   }
   if(is_first_flush_) {

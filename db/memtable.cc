@@ -121,7 +121,13 @@ void MemTable::Add(SequenceNumber s, ValueType type, const Slice& key,
   assert(p + val_size == buf + encoded_len);
   table_.Insert(buf,encoded_len);
 }
-
+bool MemTable::is_empty() {
+  auto node = table_.head_->Next(0);
+  if(node != nullptr) {
+    return false;
+  }
+  return true;
+}
 bool MemTable::GetFirst(std::string *value) {
   auto node = table_.head_->Next(0);
 
